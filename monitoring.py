@@ -2,66 +2,22 @@ import re
 import subprocess
 import time
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import ttk
 
 import numpy as np
 
 
-def get_job_details(username, server_address, job_name, speed_history=100):
-    # Get job description
-    job_description = subprocess.Popen(
-        ["ssh", f"{username}@{server_address}", "runai", "describe", "job", job_name], stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL
-    )
-
-    job_description = job_description.stdout.read().decode("latin-1")
-
-    if "could not find any job" in job_description:
-        return -1, -1, "Job not found"
-    # Determine if pending or failed
-    elif "FAILED" in job_description:
-        return -1, -1, "Job failed"
-    elif "PENDING" in job_description:
-        return -1, -1, "Job pending"
-
-    # Get logs
-    job_logs = subprocess.Popen(
-        ["ssh", f"{username}@{server_address}", "runai", "logs", job_name], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
-    )
-    # Get logs as string
-    job_logs = job_logs.stdout.read().decode("latin-1")
-
-    # Get latest iteration speeds
-    regex = re.compile("[0-9]*[.][0-9]*s/it")
-    speed_matches = regex.findall(job_logs)
-
-    # Isolate floats
-    speed_matches = [float(x.split("s/it")[0]) for x in speed_matches]
-
-    # Get mean of last "speed_history" iterations
-    try:
-        speed_mean = np.mean(speed_matches[-speed_history:])
-        speed_latest = speed_matches[-1]
-    except IndexError:
-        # Job probably just resumed/ was submitted
-        speed_latest = -1
-        speed_mean = -1
-
-    # Isolate job node
-    regex = re.compile(r'dgx[\w-]+(?=/)')
-    job_node = regex.findall(job_description)[0].split("/")[0]
-
-    return speed_mean, speed_latest, job_node
-
-
 class SpeedGUI(object):
-    def __init__(self, username, server_address, job_names, speed_history=100, loop_timing=10000):
+    def __init__(self, username, server_address, job_names,
+                 speed_history=100, loop_timing=10000, logging_mode="s/it"):
         self.username = username
         self.server_address = server_address
         self.job_names = job_names
         self.speed_history = speed_history
         self.loop_timing = loop_timing
+        self.logging_mode = logging_mode
         self.current_times = {job_name: time.time() for job_name in self.job_names}
+        self.current_time = time.time()
 
         self.node_dict = {}
 
@@ -110,9 +66,61 @@ class SpeedGUI(object):
 
         self.root.mainloop()
 
-    def update_speed(self, frame, job_name, message_box_flag=True):
-        speed_mean, speed_latest, node = get_job_details(self.username, self.server_address, job_name,
-                                                         self.speed_history)
+    def get_job_details(self, job_name):
+        # Get job description
+        job_description = subprocess.Popen(
+            ["ssh", f"{self.username}@{self.server_address}", "runai", "describe", "job", job_name], stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL
+        )
+
+        job_description = job_description.stdout.read().decode("latin-1")
+
+        if "could not find any job" in job_description:
+            return -1, -1, "Job not found"
+        # Determine if pending or failed
+        elif "FAILED" in job_description:
+            return -1, -1, "Job failed"
+        elif "PENDING" in job_description:
+            return -1, -1, "Job pending"
+
+        # Get logs
+        job_logs = subprocess.Popen(
+            ["ssh", f"{self.username}@{self.server_address}", "runai", "logs", job_name], stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL
+        )
+        # Get logs as string
+        job_logs = job_logs.stdout.read().decode("latin-1")
+
+        # Get latest iteration speeds
+        regex = re.compile("([0-9]*[.][0-9]*s/it|[0-9]*[.][0-9]*it/s)")
+        speed_matches = regex.findall(job_logs)
+
+        # Isolate floats
+        if self.logging_mode == "s/it":
+            speed_matches = [float(x.split("s/it")[0]) if "s/it" in x else 1/float(x.split("it/s")[0])
+                             for x in speed_matches]
+        else:
+            speed_matches = [1/float(x.split("s/it")[0]) if "s/it" in x else float(x.split("it/s")[0])
+                             for x in speed_matches]
+        # speed_matches = [float(x.split("s/it")[0]) for x in speed_matches]
+
+        # Get mean of last "speed_history" iterations
+        try:
+            speed_mean = np.mean(speed_matches[-self.speed_history:])
+            speed_latest = speed_matches[-1]
+        except IndexError:
+            # Job probably just resumed/ was submitted
+            speed_latest = -1
+            speed_mean = -1
+
+        # Isolate job node
+        regex = re.compile(r'dgx[\w-]+(?=/)')
+        job_node = regex.findall(job_description)[0].split("/")[0]
+
+        return speed_mean, speed_latest, job_node
+
+    def update_speed(self, frame, job_name):
+        speed_mean, speed_latest, node = self.get_job_details(job_name)
 
         if speed_latest == -1 and speed_mean == -1:
             for line_index in range(1, len(frame.winfo_children()) - 1):
@@ -135,62 +143,86 @@ class SpeedGUI(object):
                 speed_latest_label = ttk.Label(frame, text="Speed latest: ", font=("gothic", 15, "normal"))
                 speed_latest_label.pack()
             # Access labels within the frame
-            frame.winfo_children()[-3].config(text=f"Speed mean: {speed_mean:.2f}")
-            frame.winfo_children()[-2].config(text=f"Speed latest: {speed_latest:.2f}")
+            frame.winfo_children()[-3].config(text=f"Speed mean: {speed_mean:.2f}{self.logging_mode}")
+            frame.winfo_children()[-2].config(text=f"Speed latest: {speed_latest:.2f}{self.logging_mode}")
             # Update node dictionary or add node key if not present
             # https://stackoverflow.com/questions/12905999/how-to-create-key-or-append-an-element-to-key
             self.node_dict.setdefault(node, []).append(speed_latest)
 
-            if message_box_flag:
-                if speed_latest > 10 * speed_mean:
-                    messagebox.showwarning("Warning", "Oh boy")
-                elif speed_latest > 1.5 * speed_mean:
-                    messagebox.showwarning("Warning", "Speed is over 50% higher than mean!")
-                elif speed_latest < 0.5 * speed_mean:
-                    messagebox.showwarning("Warning", "Speed is over 50% lower than mean!")
-                else:
-                    pass
-            else:
+            # Update status box
+            if self.logging_mode == "s/it":
                 if speed_latest > 50:
                     # Just update status box
                     frame.winfo_children()[-1].config(
-                        text=f"{node} Status: Extreme slowdown! [{time.time() - self.current_times[job_name]:.1f}]\n\n",
+                        text=f"{node} Status: Extreme slowdown!\n\n",
                         style="FR.TLabel",
                         font=("gothic", 18, "bold"),
                     )
                 elif speed_latest > 10:
                     # Just update status box
                     frame.winfo_children()[-1].config(
-                        text=f"{node} Status: Worrying [{time.time() - self.current_times[job_name]:.1f}]\n\n",
+                        text=f"{node} Status: Worrying\n\n",
                         style="FO.TLabel",
                         font=("gothic", 16, "bold"),
                     )
                 elif 5 < speed_latest < 10:
                     # Just update status box
                     frame.winfo_children()[-1].config(
-                        text=f"{node} Status: Normal [{time.time() - self.current_times[job_name]:.1f}]\n\n",
+                        text=f"{node} Status: Normal\n\n",
                         style="FG.TLabel",
                         font=("gothic", 15, "bold"),
                     )
                 elif speed_latest > 0:
                     frame.winfo_children()[-1].config(
-                        text=f"{node} Status: Excellent (for now) [{time.time() - self.current_times[job_name]:.1f}]\n\n",
+                        text=f"{node} Status: Excellent (for now)\n\n",
                         style="FB.TLabel",
                         font=("gothic", 15, "bold"),
+                    )
+            else:
+                if speed_latest > 1/5:
+                    # Just update status box
+                    frame.winfo_children()[-1].config(
+                        text=f"{node} Status: Excellent (for now)\n\n",
+                        style="FB.TLabel",
+                        font=("gothic", 15, "bold"),
+                    )
+                elif 1/5 < speed_latest < 1/10:
+                    # Just update status box
+                    frame.winfo_children()[-1].config(
+                        text=f"{node} Status: Normal\n\n",
+                        style="FG.TLabel",
+                        font=("gothic", 15, "bold"),
+                    )
+                elif 1/10 > speed_latest > 1/50:
+                    # Just update status box
+                    frame.winfo_children()[-1].config(
+                        text=f"{node} Status: Worrying\n\n",
+                        style="FO.TLabel",
+                        font=("gothic", 16, "bold"),
+                    )
+                else:
+                    frame.winfo_children()[-1].config(
+                        text=f"{node} Status: Extreme slowdown!\n\n",
+                        style="FR.TLabel",
+                        font=("gothic", 18, "bold"),
                     )
 
         self.current_times[job_name] = time.time()
 
     def update_all(self):
+        # Get time
+        # self.current_time = time.time()
         # Update job-related frames
         for frame, job_name in zip(self.job_frames, self.job_names):
-            self.update_speed(frame, job_name, False)
+            self.update_speed(frame, job_name)
 
         # Clear previous labels
         for widget in self.node_frame.winfo_children():
             widget.destroy()
 
         # Update node label
+        last_update_text = f"Last update: {time.time() - self.current_time:.1f}s\n"
+        ttk.Label(self.node_frame, text=last_update_text, font=("gothic", 16, "bold")).pack()
         node_text = "Node info"
         ttk.Label(self.node_frame, text=node_text, font=("gothic", 20, "bold")).pack()
         for node, node_speed in self.node_dict.items():
@@ -198,23 +230,42 @@ class SpeedGUI(object):
                 pass
             else:
                 mean_node_speed = np.mean(node_speed)
-                if mean_node_speed > 50:
-                    node_message = "Extreme slowdown!"
-                    node_style = "FR.TLabel"
-                    node_font = ("gothic", 18, "bold")
-                elif mean_node_speed > 10:
-                    node_message = "Worrying"
-                    node_style = "FO.TLabel"
-                    node_font = ("gothic", 16, "bold")
-                elif 5 < mean_node_speed < 10:
-                    node_message = "Normal"
-                    node_style = "FG.TLabel"
-                    node_font = ("gothic", 15, "bold")
+                if self.logging_mode == "s/it":
+                    if mean_node_speed > 50:
+                        node_message = "Extreme slowdown!"
+                        node_style = "FR.TLabel"
+                        node_font = ("gothic", 18, "bold")
+                    elif mean_node_speed > 10:
+                        node_message = "Worrying"
+                        node_style = "FO.TLabel"
+                        node_font = ("gothic", 16, "bold")
+                    elif 5 < mean_node_speed < 10:
+                        node_message = "Normal"
+                        node_style = "FG.TLabel"
+                        node_font = ("gothic", 15, "bold")
+                    else:
+                        node_message = "Excellent (for now)"
+                        node_style = "FB.TLabel"
+                        node_font = ("gothic", 15, "bold")
                 else:
-                    node_message = "Excellent (for now)"
-                    node_style = "FB.TLabel"
-                    node_font = ("gothic", 15, "bold")
-                node_text += f"{node}: {mean_node_speed:.2f}\n"
+                    if mean_node_speed > 1/5:
+                        node_message = "Excellent (for now)"
+                        node_style = "FB.TLabel"
+                        node_font = ("gothic", 15, "bold")
+                    elif 1/5 > mean_node_speed > 1/10:
+                        node_message = "Normal"
+                        node_style = "FG.TLabel"
+                        node_font = ("gothic", 15, "bold")
+                    elif 1/10 > mean_node_speed > 1/50:
+                        node_message = "Worrying"
+                        node_style = "FO.TLabel"
+                        node_font = ("gothic", 16, "bold")
+                    else:
+                        node_message = "Extreme slowdown!"
+                        node_style = "FR.TLabel"
+                        node_font = ("gothic", 18, "bold")
+
+                # node_text += f"{node}: {mean_node_speed:.2f}\n"
                 ttk.Label(self.node_frame, text=f"{node}: {node_message}", font=node_font, style=node_style).pack()
 
         # Add a space
@@ -222,6 +273,9 @@ class SpeedGUI(object):
 
         # Reset node dictionary
         self.node_dict = {}
+
+        # Update time
+        self.current_time = time.time()
 
         # Schedule the next update
         self.root.after(self.loop_timing, self.update_all)
@@ -237,10 +291,13 @@ if __name__ == "__main__":
     parser.add_argument("--job_names", type=str, nargs="+", help="Job name")
     parser.add_argument("--speed_history", type=int, help="How many iterations to average speed over", default=100)
     parser.add_argument("--loop_timing", type=int, help="How often to update GUI in s", default=100)
+    parser.add_argument("--logging_mode", type=str, help="Logging preference: s/it or it/s",
+                        default="s/it")
     args = parser.parse_args()
 
     job = SpeedGUI(username=args.username,
                    server_address=args.server_address,
                    job_names=args.job_names,
                    speed_history=args.speed_history,
-                   loop_timing=args.loop_timing * 1000)
+                   loop_timing=args.loop_timing * 1000,
+                   logging_mode=args.logging_mode)

@@ -36,6 +36,8 @@ The script accepts the following command-line arguments:
 
 - `--loop_timing`: How often to update the GUI in seconds. Default is set to 100 seconds.
 
+- `--logging_mode`: "Logging preference: s/it or it/s". Default is set to "s/it".
+
 ### Running the Script
 
 To run the script, execute it from the command line with the desired arguments. For example:
