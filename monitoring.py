@@ -16,11 +16,9 @@ def get_job_details(username, server_address, job_name, speed_history=100):
 
     job_description = job_description.stdout.read().decode("latin-1")
 
-    # if not job_description:
-    #     return -1, -1, "Job not found"
     if "could not find any job" in job_description:
         return -1, -1, "Job not found"
-    # Determine if running, pending, or failed
+    # Determine if pending or failed
     elif "FAILED" in job_description:
         return -1, -1, "Job failed"
     elif "PENDING" in job_description:
@@ -28,7 +26,7 @@ def get_job_details(username, server_address, job_name, speed_history=100):
 
     # Get logs
     job_logs = subprocess.Popen(
-        ["ssh", "pedro@dgx1a", "runai", "logs", job_name], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
+        ["ssh", f"{username}@{server_address}", "runai", "logs", job_name], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
     )
     # Get logs as string
     job_logs = job_logs.stdout.read().decode("latin-1")
