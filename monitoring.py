@@ -7,10 +7,11 @@ from tkinter import messagebox, ttk
 import numpy as np
 
 
-def get_job_details(job_name, speed_history=100):
+def get_job_details(username, server_address, job_name, speed_history=100):
     # Get job description
     job_description = subprocess.Popen(
-        ["ssh", "pedro@dgx1a", "runai", "describe", "job", job_name], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
+        ["ssh", f"{username}@{server_address}", "runai", "describe", "job", job_name], stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL
     )
 
     job_description = job_description.stdout.read().decode("latin-1")
@@ -56,7 +57,9 @@ def get_job_details(job_name, speed_history=100):
 
 
 class SpeedGUI(object):
-    def __init__(self, job_names, speed_history=100, loop_timing=10000):
+    def __init__(self, username, server_address, job_names, speed_history=100, loop_timing=10000):
+        self.username = username
+        self.server_address = server_address
         self.job_names = job_names
         self.speed_history = speed_history
         self.loop_timing = loop_timing
@@ -65,7 +68,7 @@ class SpeedGUI(object):
         self.node_dict = {}
 
         self.root = tk.Tk()
-        self.root.title("Marshall Monitor")
+        self.root.title("Marshall Monitor" if username == "pedro" else "DGX Monitor")
         self.root.attributes("-topmost", True)
 
         self.style = ttk.Style()
@@ -105,17 +108,16 @@ class SpeedGUI(object):
             status_label = ttk.Label(frame, text="Status: ")
             status_label.pack()
 
-            # self.update_speed(frame, job_name, message_box_flag=False)
-
         self.root.after(0, self.update_all)
 
         self.root.mainloop()
 
     def update_speed(self, frame, job_name, message_box_flag=True):
-        speed_mean, speed_latest, node = get_job_details(job_name, self.speed_history)
+        speed_mean, speed_latest, node = get_job_details(self.username, self.server_address, job_name,
+                                                         self.speed_history)
 
         if speed_latest == -1 and speed_mean == -1:
-            for line_index in range(1, len(frame.winfo_children())-1):
+            for line_index in range(1, len(frame.winfo_children()) - 1):
                 # While frame has more than 2 children (i.e., more than just the job name and job status labels)
                 # Delete the second label (i.e., the speed-related label)
                 while len(frame.winfo_children()) > 2:
@@ -124,7 +126,6 @@ class SpeedGUI(object):
             # Update job with specific error returned by investigating the job description
             frame.winfo_children()[-1].config(
                 text=f"{node}\n\n", style="FP.TLabel", font=("gothic", 16, "bold")
-                # text=f"{node} Status: Job failed or is Pending\n\n", style="FP.TLabel", font=("gothic", 16, "bold")
             )
 
         else:
@@ -233,9 +234,15 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="Job speed monitor")
+    parser.add_argument("--username", type=str, help="RunAI username")
+    parser.add_argument("--server_address", type=str, default="dgx1a", help="Server address or alias")
     parser.add_argument("--job_names", type=str, nargs="+", help="Job name")
     parser.add_argument("--speed_history", type=int, help="How many iterations to average speed over", default=100)
     parser.add_argument("--loop_timing", type=int, help="How often to update GUI in s", default=100)
     args = parser.parse_args()
 
-    job = SpeedGUI(job_names=args.job_names, speed_history=args.speed_history, loop_timing=args.loop_timing * 1000)
+    job = SpeedGUI(username=args.username,
+                   server_address=args.server_address,
+                   job_names=args.job_names,
+                   speed_history=args.speed_history,
+                   loop_timing=args.loop_timing * 1000)
