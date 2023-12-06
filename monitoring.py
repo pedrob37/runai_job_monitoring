@@ -3,7 +3,6 @@ import subprocess
 import time
 import tkinter as tk
 from tkinter import ttk
-
 import numpy as np
 
 
@@ -16,7 +15,6 @@ class SpeedGUI(object):
         self.speed_history = speed_history
         self.loop_timing = loop_timing
         self.logging_mode = logging_mode
-        self.current_times = {job_name: time.time() for job_name in self.job_names}
         self.current_time = time.time()
 
         self.node_dict = {}
@@ -37,6 +35,29 @@ class SpeedGUI(object):
         self.job_frames = []
         self.node_frame = ttk.Frame(self.root)
         self.node_frame.pack()
+
+        # Account for wildcards and missing job names
+        if not self.job_names or "*" in self.job_names[0]:
+            # Double grep if there is an asterisk in job_names (i.e., wildcard)
+            if "*" in self.job_names[0]:
+                runai_command = f"runai list | grep Running | grep {''.join(self.job_names[0].split('*'))}"
+            else:
+                runai_command = f"runai list | grep Running"
+            # Get job list
+            job_list = subprocess.Popen(
+                ["ssh", f"{self.username}@{self.server_address}", runai_command],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL
+            )
+            # Get logs as string
+            job_list = job_list.stdout.read().decode("latin-1")
+
+            # Split according to each job
+            job_list = job_list.split("\n")
+            self.job_names = [x.split()[0] for x in job_list[1:-1]]
+
+        # Starting times
+        self.current_times = {job_name: time.time() for job_name in self.job_names}
 
         for job_name in self.job_names:
             frame = ttk.Frame(self.root)
@@ -88,12 +109,17 @@ class SpeedGUI(object):
             ["ssh", f"{self.username}@{self.server_address}", "runai", "logs", job_name], stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL
         )
+
         # Get logs as string
         job_logs = job_logs.stdout.read().decode("latin-1")
 
         # Get latest iteration speeds
         regex = re.compile("([0-9]*[.][0-9]*s/it|[0-9]*[.][0-9]*it/s)")
         speed_matches = regex.findall(job_logs)
+
+        # Account for the fact that the job might have just started and not have any speed matches yet
+        if len(speed_matches) == 0:
+            return -1, -1, "Job just started: No speed matches yet"
 
         # Isolate floats
         if self.logging_mode == "s/it":

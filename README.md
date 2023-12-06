@@ -30,7 +30,7 @@ The script accepts the following command-line arguments:
 
 - `--server_address`: Server address or alias. Default is set to "dgx1a".
 
-- `--job_names`: List of job names to monitor.
+- `--job_names`: List of job names to monitor. If not specified, all jobs will be monitored. Supports wildcards.
 
 - `--speed_history`: Number of iterations to average speed over. Default is set to 100.
 
