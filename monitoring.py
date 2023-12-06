@@ -37,24 +37,11 @@ class SpeedGUI(object):
         self.node_frame.pack()
 
         # Account for wildcards and missing job names
-        if not self.job_names or "*" in self.job_names[0]:
-            # Double grep if there is an asterisk in job_names (i.e., wildcard)
-            if "*" in self.job_names[0]:
-                runai_command = f"runai list | grep Running | grep {''.join(self.job_names[0].split('*'))}"
-            else:
-                runai_command = f"runai list | grep Running"
-            # Get job list
-            job_list = subprocess.Popen(
-                ["ssh", f"{self.username}@{self.server_address}", runai_command],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL
-            )
-            # Get logs as string
-            job_list = job_list.stdout.read().decode("latin-1")
-
-            # Split according to each job
-            job_list = job_list.split("\n")
-            self.job_names = [x.split()[0] for x in job_list[1:-1]]
+        if not self.job_names:
+            self.fetch_job_names(wildcard=False)
+        elif "*" in self.job_names[0]:
+            assert len(self.job_names) == 1, "Only one wildcard supported!"
+            self.fetch_job_names(wildcard=True)
 
         # Starting times
         self.current_times = {job_name: time.time() for job_name in self.job_names}
@@ -69,11 +56,6 @@ class SpeedGUI(object):
             job_name_label = ttk.Label(frame, text=f"Job name: {job_name}", font=("gothic", 16, "bold"))
             job_name_label.pack()
 
-            # speed_history_label = ttk.Label(
-            #     frame, text=f"Speed history: {self.speed_history}", font=("gothic", 15, "normal")
-            # )
-            # speed_history_label.pack()
-
             speed_mean_label = ttk.Label(frame, text="Speed mean: ", font=("gothic", 15, "normal"))
             speed_mean_label.pack()
 
@@ -86,6 +68,27 @@ class SpeedGUI(object):
         self.root.after(0, self.update_all)
 
         self.root.mainloop()
+
+    def fetch_job_names(self, wildcard=False):
+        if wildcard:
+            first_job_line = 0
+            # Double grep if there is an asterisk in job_names (i.e., wildcard)
+            runai_command = f"runai list | grep Running | grep {''.join(self.job_names[0].split('*'))}"
+        else:
+            first_job_line = 1
+            runai_command = f"runai list | grep Running"
+        # Get job list
+        job_list = subprocess.Popen(
+            ["ssh", f"{self.username}@{self.server_address}", runai_command],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL
+        )
+        # Get logs as string
+        job_list = job_list.stdout.read().decode("latin-1")
+
+        # Split according to each job
+        job_list = job_list.split("\n")
+        self.job_names = [x.split()[0] for x in job_list[first_job_line:-1]]
 
     def get_job_details(self, job_name):
         # Get job description
@@ -128,9 +131,6 @@ class SpeedGUI(object):
         else:
             speed_matches = [1/float(x.split("s/it")[0]) if "s/it" in x else float(x.split("it/s")[0])
                              for x in speed_matches]
-        # speed_matches = [float(x.split("s/it")[0]) for x in speed_matches]
-
-        # Get mean of last "speed_history" iterations
         try:
             speed_mean = np.mean(speed_matches[-self.speed_history:])
             speed_latest = speed_matches[-1]
