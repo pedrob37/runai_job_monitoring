@@ -2,13 +2,15 @@ import re
 import subprocess
 import time
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, PhotoImage
+from PIL import ImageTk as itk
 import numpy as np
 
 
 class SpeedGUI(object):
     def __init__(self, username, server_address, job_names,
-                 speed_history=100, loop_timing=10000, logging_mode="s/it"):
+                 speed_history=100, loop_timing=10000, logging_mode="s/it",
+                 festive=False):
         self.username = username
         self.server_address = server_address
         self.job_names = job_names
@@ -16,6 +18,7 @@ class SpeedGUI(object):
         self.loop_timing = loop_timing
         self.logging_mode = logging_mode
         self.current_time = time.time()
+        self.festive = festive
 
         self.node_dict = {}
 
@@ -65,9 +68,40 @@ class SpeedGUI(object):
             status_label = ttk.Label(frame, text="Status: ")
             status_label.pack()
 
+        self.ind = 0
+
+        # Festive
+        if self.festive:
+            from urllib.request import urlopen
+            from PIL import Image
+            from io import BytesIO
+            URL = "https://i.gifer.com/origin/35/353fb026a4147fc679d3292fdd59663f_w200.gif"
+
+            gif_data = urlopen(URL).read()
+            self.image = Image.open(BytesIO(gif_data))
+            self.ind = 0
+            self.frames = [itk.PhotoImage(self.image.copy()) for _ in range(self.image.n_frames)]
+
+            self.gif_label = ttk.Label(image=self.frames[self.ind])
+            self.gif_label.pack()
+            self.root.after(0, self.update_gifs)
+
         self.root.after(0, self.update_all)
 
         self.root.mainloop()
+
+    def update_gifs(self):
+        # https://stackoverflow.com/questions/28518072/play-animations-in-gif-with-tkinter
+        self.ind += 1
+        if self.ind == len(self.frames):
+            self.ind = 0
+
+        # Reload the image for each frame
+        self.image.seek(self.ind)
+        self.frames[self.ind] = itk.PhotoImage(self.image.copy())
+
+        self.gif_label.configure(image=self.frames[self.ind])
+        self.root.after(120, self.update_gifs)
 
     def fetch_job_names(self, wildcard=False):
         if wildcard:
@@ -93,7 +127,8 @@ class SpeedGUI(object):
     def get_job_details(self, job_name):
         # Get job description
         job_description = subprocess.Popen(
-            ["ssh", f"{self.username}@{self.server_address}", "runai", "describe", "job", job_name], stdout=subprocess.PIPE,
+            ["ssh", f"{self.username}@{self.server_address}", "runai", "describe", "job", job_name],
+            stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL
         )
 
@@ -143,10 +178,15 @@ class SpeedGUI(object):
         regex = re.compile(r'dgx[\w-]+(?=/)')
         job_node = regex.findall(job_description)[0].split("/")[0]
 
-        return speed_mean, speed_latest, job_node
+        # Get job age
+        job_description_lines = job_description.split("\n")
+        # Find line that contains job age
+        relevant_line = job_description_lines.index([x for x in job_description_lines if x.startswith("POD")][0]) + 1
+        job_age = job_description_lines[relevant_line].split()[-2]
+        return speed_mean, speed_latest, job_node, job_age
 
     def update_speed(self, frame, job_name):
-        speed_mean, speed_latest, node = self.get_job_details(job_name)
+        speed_mean, speed_latest, node, age = self.get_job_details(job_name)
 
         if speed_latest == -1 and speed_mean == -1:
             for line_index in range(1, len(frame.winfo_children()) - 1):
@@ -157,9 +197,7 @@ class SpeedGUI(object):
                     existing_widget.destroy()
             # Update job with specific error returned by investigating the job description
             frame.winfo_children()[-1].config(
-                text=f"{node}\n\n", style="FP.TLabel", font=("gothic", 16, "bold")
-            )
-
+                text=f"{node}\n\n", style="FP.TLabel", font=("gothic", 16, "bold"))
         else:
             # If length of frame is 2, job was in a pending/ failed/ non-existent state before, add speed-related labels
             if len(frame.winfo_children()) == 2:
@@ -169,6 +207,8 @@ class SpeedGUI(object):
                 speed_latest_label = ttk.Label(frame, text="Speed latest: ", font=("gothic", 15, "normal"))
                 speed_latest_label.pack()
             # Access labels within the frame
+            frame.winfo_children()[-4].config(text=f"{job_name} ({age})")
+            frame.winfo_children()[-3].config(text=f"Speed mean: {speed_mean:.2f}{self.logging_mode}")
             frame.winfo_children()[-3].config(text=f"Speed mean: {speed_mean:.2f}{self.logging_mode}")
             frame.winfo_children()[-2].config(text=f"Speed latest: {speed_latest:.2f}{self.logging_mode}")
             # Update node dictionary or add node key if not present
@@ -236,8 +276,6 @@ class SpeedGUI(object):
         self.current_times[job_name] = time.time()
 
     def update_all(self):
-        # Get time
-        # self.current_time = time.time()
         # Update job-related frames
         for frame, job_name in zip(self.job_frames, self.job_names):
             self.update_speed(frame, job_name)
@@ -319,6 +357,7 @@ if __name__ == "__main__":
     parser.add_argument("--loop_timing", type=int, help="How often to update GUI in s", default=100)
     parser.add_argument("--logging_mode", type=str, help="Logging preference: s/it or it/s",
                         default="s/it")
+    parser.add_argument('--festive', action='store_true')
     args = parser.parse_args()
 
     job = SpeedGUI(username=args.username,
@@ -326,4 +365,5 @@ if __name__ == "__main__":
                    job_names=args.job_names,
                    speed_history=args.speed_history,
                    loop_timing=args.loop_timing * 1000,
-                   logging_mode=args.logging_mode)
+                   logging_mode=args.logging_mode,
+                   festive=args.festive)
