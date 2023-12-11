@@ -5,11 +5,12 @@ import tkinter as tk
 from tkinter import ttk, PhotoImage
 from PIL import ImageTk as itk
 import numpy as np
+import json
 
 
 class SpeedGUI(object):
     def __init__(self, username, server_address, job_names,
-                 speed_history=100, loop_timing=10000, logging_mode="s/it",
+                 speed_history=100, loop_timing=10000, logging_mode="s/it", remote_aggregation=False,
                  festive=False):
         self.username = username
         self.server_address = server_address
@@ -18,6 +19,7 @@ class SpeedGUI(object):
         self.loop_timing = loop_timing
         self.logging_mode = logging_mode
         self.current_time = time.time()
+        self.remote_aggregation = remote_aggregation
         self.festive = festive
 
         self.node_dict = {}
@@ -28,6 +30,7 @@ class SpeedGUI(object):
 
         self.style = ttk.Style()
         self.style.configure("BW.TLabel", background="white")
+        self.style.configure("FB.TLabel", foreground="black")
         self.style.configure("FR.TLabel", foreground="red")
         self.style.configure("FO.TLabel", foreground="dark orange")
         self.style.configure("FG.TLabel", foreground="green")
@@ -91,6 +94,7 @@ class SpeedGUI(object):
         self.root.mainloop()
 
     def update_gifs(self):
+        from PIL import Image
         # https://stackoverflow.com/questions/28518072/play-animations-in-gif-with-tkinter
         self.ind += 1
         if self.ind == len(self.frames):
@@ -98,7 +102,7 @@ class SpeedGUI(object):
 
         # Reload the image for each frame
         self.image.seek(self.ind)
-        self.frames[self.ind] = itk.PhotoImage(self.image.copy())
+        self.frames[self.ind] = itk.PhotoImage(self.image.resize((200, 200), Image.LANCZOS).copy())
 
         self.gif_label.configure(image=self.frames[self.ind])
         self.root.after(120, self.update_gifs)
@@ -135,12 +139,12 @@ class SpeedGUI(object):
         job_description = job_description.stdout.read().decode("latin-1")
 
         if "could not find any job" in job_description:
-            return -1, -1, "Job not found"
+            return -1, -1, "Job not found", "N/A"
         # Determine if pending or failed
         elif "FAILED" in job_description:
-            return -1, -1, "Job failed"
+            return -1, -1, "Job failed", "N/A"
         elif "PENDING" in job_description:
-            return -1, -1, "Job pending"
+            return -1, -1, "Job pending", "N/A"
 
         # Get logs
         job_logs = subprocess.Popen(
@@ -157,14 +161,14 @@ class SpeedGUI(object):
 
         # Account for the fact that the job might have just started and not have any speed matches yet
         if len(speed_matches) == 0:
-            return -1, -1, "Job just started: No speed matches yet"
+            return -1, -1, "Job just started: No speed matches yet", "N/A"
 
         # Isolate floats
         if self.logging_mode == "s/it":
-            speed_matches = [float(x.split("s/it")[0]) if "s/it" in x else 1/float(x.split("it/s")[0])
+            speed_matches = [float(x.split("s/it")[0]) if "s/it" in x else 1 / float(x.split("it/s")[0])
                              for x in speed_matches]
         else:
-            speed_matches = [1/float(x.split("s/it")[0]) if "s/it" in x else float(x.split("it/s")[0])
+            speed_matches = [1 / float(x.split("s/it")[0]) if "s/it" in x else float(x.split("it/s")[0])
                              for x in speed_matches]
         try:
             speed_mean = np.mean(speed_matches[-self.speed_history:])
@@ -208,8 +212,10 @@ class SpeedGUI(object):
                 speed_latest_label.pack()
             # Access labels within the frame
             frame.winfo_children()[-4].config(text=f"{job_name} ({age})")
-            frame.winfo_children()[-3].config(text=f"Speed mean: {speed_mean:.2f}{self.logging_mode}")
-            frame.winfo_children()[-3].config(text=f"Speed mean: {speed_mean:.2f}{self.logging_mode}")
+            frame.winfo_children()[-3].config(text=f"Speed mean: {speed_mean:.2f}{self.logging_mode}",
+                                              style="BB.TLabel")
+            frame.winfo_children()[-3].config(text=f"Speed mean: {speed_mean:.2f}{self.logging_mode}",
+                                              style="BB.TLabel")
             frame.winfo_children()[-2].config(text=f"Speed latest: {speed_latest:.2f}{self.logging_mode}")
             # Update node dictionary or add node key if not present
             # https://stackoverflow.com/questions/12905999/how-to-create-key-or-append-an-element-to-key
@@ -238,6 +244,7 @@ class SpeedGUI(object):
                         style="FG.TLabel",
                         font=("gothic", 15, "bold"),
                     )
+
                 elif speed_latest > 0:
                     frame.winfo_children()[-1].config(
                         text=f"{node} Status: Excellent (for now)\n\n",
@@ -245,21 +252,21 @@ class SpeedGUI(object):
                         font=("gothic", 15, "bold"),
                     )
             else:
-                if speed_latest > 1/5:
+                if speed_latest > 1 / 5:
                     # Just update status box
                     frame.winfo_children()[-1].config(
                         text=f"{node} Status: Excellent (for now)\n\n",
                         style="FB.TLabel",
                         font=("gothic", 15, "bold"),
                     )
-                elif 1/5 < speed_latest < 1/10:
+                elif 1 / 5 < speed_latest < 1 / 10:
                     # Just update status box
                     frame.winfo_children()[-1].config(
                         text=f"{node} Status: Normal\n\n",
                         style="FG.TLabel",
                         font=("gothic", 15, "bold"),
                     )
-                elif 1/10 > speed_latest > 1/50:
+                elif 1 / 10 > speed_latest > 1 / 50:
                     # Just update status box
                     frame.winfo_children()[-1].config(
                         text=f"{node} Status: Worrying\n\n",
@@ -287,9 +294,52 @@ class SpeedGUI(object):
         # Update node label
         last_update_text = f"Last update: {time.time() - self.current_time:.1f}s\n"
         ttk.Label(self.node_frame, text=last_update_text, font=("gothic", 16, "bold")).pack()
-        node_text = "Node info"
+        node_text = f"Node info{' (Remote aggregation)' if self.remote_aggregation else ''}"
         ttk.Label(self.node_frame, text=node_text, font=("gothic", 20, "bold")).pack()
-        for node, node_speed in self.node_dict.items():
+
+        if self.remote_aggregation:
+            # Loop through user remote logs
+            remote_path = f"/nfs/project/AMIGO/Monitor_Aggregation"
+            json_files = subprocess.Popen(
+                ["ssh", f"{self.username}@{self.server_address}",
+                 f"ls -t {remote_path}/*_node_info.json"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL)
+
+            json_files = json_files.stdout.read().decode("latin-1").split("\n")[:-1]
+
+            # Aggregate node dictionary for all users
+            aggregate_node_dict = {}
+            for json_file in json_files:
+                ssh_command = f'ssh {self.username}@{self.server_address} "cat {json_file}"'
+                loaded_node_dict = subprocess.check_output(ssh_command,
+                                                           shell=True, stderr=subprocess.DEVNULL).decode('utf-8')
+                result_dict = json.loads(loaded_node_dict)
+                # Convert to standard set in current execution: s/it or it/s
+                if self.logging_mode == "s/it" and result_dict["logging_mode"] == "it/s":
+                    result_dict.pop("logging_mode")
+                    result_dict = {key: [1 / value for value in values] for key, values in result_dict.items()}
+                elif self.logging_mode == "it/s" and result_dict["logging_mode"] == "s/it":
+                    result_dict.pop("logging_mode")
+                    result_dict = {key: [1 / value for value in values] for key, values in result_dict.items()}
+                else:
+                    result_dict.pop("logging_mode")
+                for agg_key, agg_value in result_dict.items():
+                    aggregate_node_dict.setdefault(agg_key, []).extend(agg_value)
+
+            # Log node usage by saving to cluster using ssh
+            if self.remote_aggregation:
+                # Convert the dictionary to a remote json for user-aggregate metrics
+                self.node_dict["logging_mode"] = self.logging_mode
+                json_data = json.dumps(self.node_dict)
+
+                # Save JSON data to a file on the remote server using Python
+                json_save_path = f"{remote_path}/{self.username}_node_info.json"
+                ssh_command = f'ssh {self.username}@{self.server_address} "cat > {json_save_path}"'
+                subprocess.run(ssh_command, shell=True, input=json_data.encode(), stderr=subprocess.DEVNULL)
+
+        # Loop through either node dictionary or aggregate node dictionary
+        for node, node_speed in (self.node_dict.items() if not self.remote_aggregation else aggregate_node_dict.items()):
             if node == "Job not found":
                 pass
             else:
@@ -312,15 +362,15 @@ class SpeedGUI(object):
                         node_style = "FB.TLabel"
                         node_font = ("gothic", 15, "bold")
                 else:
-                    if mean_node_speed > 1/5:
+                    if mean_node_speed > 1 / 5:
                         node_message = "Excellent (for now)"
                         node_style = "FB.TLabel"
                         node_font = ("gothic", 15, "bold")
-                    elif 1/5 > mean_node_speed > 1/10:
+                    elif 1 / 5 > mean_node_speed > 1 / 10:
                         node_message = "Normal"
                         node_style = "FG.TLabel"
                         node_font = ("gothic", 15, "bold")
-                    elif 1/10 > mean_node_speed > 1/50:
+                    elif 1 / 10 > mean_node_speed > 1 / 50:
                         node_message = "Worrying"
                         node_style = "FO.TLabel"
                         node_font = ("gothic", 16, "bold")
@@ -329,8 +379,8 @@ class SpeedGUI(object):
                         node_style = "FR.TLabel"
                         node_font = ("gothic", 18, "bold")
 
-                # node_text += f"{node}: {mean_node_speed:.2f}\n"
-                ttk.Label(self.node_frame, text=f"{node}: {node_message}", font=node_font, style=node_style).pack()
+            # node_text += f"{node}: {mean_node_speed:.2f}\n"
+            ttk.Label(self.node_frame, text=f"{node}: {node_message}", font=node_font, style=node_style).pack()
 
         # Add a space
         ttk.Label(self.node_frame, text="\n\n").pack()
@@ -358,6 +408,7 @@ if __name__ == "__main__":
     parser.add_argument("--logging_mode", type=str, help="Logging preference: s/it or it/s",
                         default="s/it")
     parser.add_argument('--festive', action='store_true')
+    parser.add_argument('--remote_aggregation', action='store_true')
     args = parser.parse_args()
 
     job = SpeedGUI(username=args.username,
@@ -366,4 +417,5 @@ if __name__ == "__main__":
                    speed_history=args.speed_history,
                    loop_timing=args.loop_timing * 1000,
                    logging_mode=args.logging_mode,
+                   remote_aggregation=args.remote_aggregation,
                    festive=args.festive)
