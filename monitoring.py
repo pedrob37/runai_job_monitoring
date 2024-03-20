@@ -1,3 +1,4 @@
+import copy
 import re
 import subprocess
 import time
@@ -10,16 +11,22 @@ import json
 
 class SpeedGUI(object):
     def __init__(self, username, server_address, job_names,
-                 speed_history=100, loop_timing=10000, logging_mode="s/it", remote_aggregation=False,
+                 speed_history=100, loop_timing=10000, logging_mode="s/it", optimal_upper_limit=5,
+                 dynamic_job_list=True,
+                 remote_aggregation=False,
                  festive=False):
+
+        # Assigning variables
         self.username = username
         self.server_address = server_address
         self.job_names = job_names
         self.speed_history = speed_history
         self.loop_timing = loop_timing
         self.logging_mode = logging_mode
+        self.optimal_upper_limit = optimal_upper_limit
         self.current_time = time.time()
         self.remote_aggregation = remote_aggregation
+        self.dynamic_job_list = dynamic_job_list
         self.festive = festive
 
         self.node_dict = {}
@@ -28,6 +35,16 @@ class SpeedGUI(object):
         self.root.title("Marshall Monitor" if username == "pedro" else "DGX Monitor")
         self.root.attributes("-topmost", True)
 
+        # Initialising empty variables to be assigned later by the get_job_list method
+        self.gif_label = None
+        self.frames = None
+        self.ind = None
+        self.image = None
+        self.current_times = None
+        self.node_frame = None
+        self.job_frames = None
+
+        # Set up styles
         self.style = ttk.Style()
         self.style.configure("BW.TLabel", background="white")
         self.style.configure("FB.TLabel", foreground="black")
@@ -37,10 +54,29 @@ class SpeedGUI(object):
         self.style.configure("FB.TLabel", foreground="blue")
         self.style.configure("FP.TLabel", foreground="purple")
 
-        # Separate frame for nodes
-        self.job_frames = []
-        self.node_frame = ttk.Frame(self.root)
-        self.node_frame.pack()
+        self.root.after(0, self.update_all)
+
+        if self.dynamic_job_list:
+            self.old_job_names = None
+            self.wildcard_presence = False if not self.job_names else (True if "*" in self.job_names[0] else False)
+            self.first_pass = True
+
+        self.root.mainloop()
+        
+    def get_job_list(self):
+        if self.dynamic_job_list:
+            if not self.first_pass:
+                # Check if current job list is different from previous one
+                self.old_job_names = copy.deepcopy(self.job_names)
+
+                if self.wildcard_presence:
+                    self.fetch_job_names(wildcard=True)
+                else:
+                    self.fetch_job_names(wildcard=False)
+
+                # If job list is the same as before, no need for a full update
+                if self.old_job_names == self.job_names:
+                    return
 
         # Account for wildcards and missing job names
         if not self.job_names:
@@ -51,6 +87,18 @@ class SpeedGUI(object):
 
         # Starting times
         self.current_times = {job_name: time.time() for job_name in self.job_names}
+
+        # If not first pass, destroy previous frames to fully update job list in case of changes
+        if self.dynamic_job_list:
+            if not self.first_pass:
+                self.node_frame.destroy()
+                for frame in self.job_frames:
+                    frame.destroy()
+
+        # Separate frame for nodes
+        self.job_frames = []
+        self.node_frame = ttk.Frame(self.root)
+        self.node_frame.pack()
 
         for job_name in self.job_names:
             frame = ttk.Frame(self.root)
@@ -89,10 +137,6 @@ class SpeedGUI(object):
             self.gif_label.pack()
             self.root.after(0, self.update_gifs)
 
-        self.root.after(0, self.update_all)
-
-        self.root.mainloop()
-
     def update_gifs(self):
         from PIL import Image
         # https://stackoverflow.com/questions/28518072/play-animations-in-gif-with-tkinter
@@ -128,6 +172,9 @@ class SpeedGUI(object):
         job_list = job_list.split("\n")
         self.job_names = [x.split()[0] for x in job_list[first_job_line:-1]]
 
+        # Exclude inference jobs
+        self.job_names = [job_name for job_name in self.job_names if "inf-" not in job_name]
+
     def get_job_details(self, job_name):
         # Get job description
         job_description = subprocess.Popen(
@@ -141,7 +188,7 @@ class SpeedGUI(object):
         if "could not find any job" in job_description:
             return -1, -1, "Job not found", "N/A"
         # Determine if pending or failed
-        elif "FAILED" in job_description:
+        elif "ERROR" in job_description:
             return -1, -1, "Job failed", "N/A"
         elif "PENDING" in job_description:
             return -1, -1, "Job pending", "N/A"
@@ -184,6 +231,7 @@ class SpeedGUI(object):
 
         # Get job age
         job_description_lines = job_description.split("\n")
+
         # Find line that contains job age
         relevant_line = job_description_lines.index([x for x in job_description_lines if x.startswith("POD")][0]) + 1
         job_age = job_description_lines[relevant_line].split()[-2]
@@ -223,21 +271,21 @@ class SpeedGUI(object):
 
             # Update status box
             if self.logging_mode == "s/it":
-                if speed_latest > 50:
+                if speed_latest > 10 * self.optimal_upper_limit:
                     # Just update status box
                     frame.winfo_children()[-1].config(
                         text=f"{node} Status: Extreme slowdown!\n\n",
                         style="FR.TLabel",
                         font=("gothic", 18, "bold"),
                     )
-                elif speed_latest > 10:
+                elif speed_latest > 2 * self.optimal_upper_limit:
                     # Just update status box
                     frame.winfo_children()[-1].config(
                         text=f"{node} Status: Worrying\n\n",
                         style="FO.TLabel",
                         font=("gothic", 16, "bold"),
                     )
-                elif 5 < speed_latest < 10:
+                elif self.optimal_upper_limit < speed_latest < 2 * self.optimal_upper_limit:
                     # Just update status box
                     frame.winfo_children()[-1].config(
                         text=f"{node} Status: Normal\n\n",
@@ -245,28 +293,28 @@ class SpeedGUI(object):
                         font=("gothic", 15, "bold"),
                     )
 
-                elif speed_latest > 0:
+                else:
                     frame.winfo_children()[-1].config(
                         text=f"{node} Status: Excellent (for now)\n\n",
                         style="FB.TLabel",
                         font=("gothic", 15, "bold"),
                     )
             else:
-                if speed_latest > 1 / 5:
+                if speed_latest > 1 / self.optimal_upper_limit:
                     # Just update status box
                     frame.winfo_children()[-1].config(
                         text=f"{node} Status: Excellent (for now)\n\n",
                         style="FB.TLabel",
                         font=("gothic", 15, "bold"),
                     )
-                elif 1 / 5 < speed_latest < 1 / 10:
+                elif 1 / self.optimal_upper_limit < speed_latest < 1 / (2 * self.optimal_upper_limit):
                     # Just update status box
                     frame.winfo_children()[-1].config(
                         text=f"{node} Status: Normal\n\n",
                         style="FG.TLabel",
                         font=("gothic", 15, "bold"),
                     )
-                elif 1 / 10 > speed_latest > 1 / 50:
+                elif 1 / (2 * self.optimal_upper_limit) > speed_latest > 1 / (10 * self.optimal_upper_limit):
                     # Just update status box
                     frame.winfo_children()[-1].config(
                         text=f"{node} Status: Worrying\n\n",
@@ -283,6 +331,14 @@ class SpeedGUI(object):
         self.current_times[job_name] = time.time()
 
     def update_all(self):
+        # Update job list
+        self.get_job_list()
+
+        # After first pass, will need to destroy previous frames to fully update job list in case of changes
+        if self.dynamic_job_list:
+            if self.first_pass:
+                self.first_pass = False
+
         # Update job-related frames
         for frame, job_name in zip(self.job_frames, self.job_names):
             self.update_speed(frame, job_name)
@@ -345,15 +401,15 @@ class SpeedGUI(object):
             else:
                 mean_node_speed = np.mean(node_speed)
                 if self.logging_mode == "s/it":
-                    if mean_node_speed > 50:
+                    if mean_node_speed > 10 * self.optimal_upper_limit:
                         node_message = "Extreme slowdown!"
                         node_style = "FR.TLabel"
                         node_font = ("gothic", 18, "bold")
-                    elif mean_node_speed > 10:
+                    elif mean_node_speed > 2 * self.optimal_upper_limit:
                         node_message = "Worrying"
                         node_style = "FO.TLabel"
                         node_font = ("gothic", 16, "bold")
-                    elif 5 < mean_node_speed < 10:
+                    elif self.optimal_upper_limit < mean_node_speed < 2 * self.optimal_upper_limit:
                         node_message = "Normal"
                         node_style = "FG.TLabel"
                         node_font = ("gothic", 15, "bold")
@@ -362,15 +418,15 @@ class SpeedGUI(object):
                         node_style = "FB.TLabel"
                         node_font = ("gothic", 15, "bold")
                 else:
-                    if mean_node_speed > 1 / 5:
+                    if mean_node_speed > 1 / self.optimal_upper_limit:
                         node_message = "Excellent (for now)"
                         node_style = "FB.TLabel"
                         node_font = ("gothic", 15, "bold")
-                    elif 1 / 5 > mean_node_speed > 1 / 10:
+                    elif 1 / self.optimal_upper_limit > mean_node_speed > 1 / (2 * self.optimal_upper_limit):
                         node_message = "Normal"
                         node_style = "FG.TLabel"
                         node_font = ("gothic", 15, "bold")
-                    elif 1 / 10 > mean_node_speed > 1 / 50:
+                    elif 1 / (2 * self.optimal_upper_limit) > mean_node_speed > 1 / (10 * self.optimal_upper_limit):
                         node_message = "Worrying"
                         node_style = "FO.TLabel"
                         node_font = ("gothic", 16, "bold")
@@ -401,12 +457,18 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Job speed monitor")
     parser.add_argument("--username", type=str, help="RunAI username")
-    parser.add_argument("--server_address", type=str, default="dgx1a", help="Server address or alias")
+    parser.add_argument("--server_address", type=str, help="Server address or alias",
+                        default="dgx1a")
     parser.add_argument("--job_names", type=str, nargs="+", help="Job name")
-    parser.add_argument("--speed_history", type=int, help="How many iterations to average speed over", default=100)
-    parser.add_argument("--loop_timing", type=int, help="How often to update GUI in s", default=100)
+    parser.add_argument("--speed_history", type=int, help="How many iterations to average speed over",
+                        default=100)
+    parser.add_argument("--loop_timing", type=int, help="How often to update GUI in s",
+                        default=100)
+    parser.add_argument("--optimal_upper_limit", type=float, help="Optimal upper limit for speed in s/it",
+                        default=5)
     parser.add_argument("--logging_mode", type=str, help="Logging preference: s/it or it/s",
                         default="s/it")
+    parser.add_argument('--dynamic_job_list', action='store_true', help="Automatically update job list")
     parser.add_argument('--festive', action='store_true')
     parser.add_argument('--remote_aggregation', action='store_true')
     args = parser.parse_args()
@@ -416,6 +478,8 @@ if __name__ == "__main__":
                    job_names=args.job_names,
                    speed_history=args.speed_history,
                    loop_timing=args.loop_timing * 1000,
+                   optimal_upper_limit=args.optimal_upper_limit,
+                   dynamic_job_list=args.dynamic_job_list,
                    logging_mode=args.logging_mode,
                    remote_aggregation=args.remote_aggregation,
                    festive=args.festive)
