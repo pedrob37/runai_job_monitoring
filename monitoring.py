@@ -33,7 +33,7 @@ class SpeedGUI(object):
 
         self.root = tk.Tk()
         self.root.title("Marshall Monitor" if username == "pedro" else "DGX Monitor")
-        self.root.attributes("-topmost", True)
+        # self.root.attributes("-topmost", True)
 
         # Initialising empty variables to be assigned later by the get_job_list method
         self.gif_label = None
@@ -53,6 +53,24 @@ class SpeedGUI(object):
         self.style.configure("FG.TLabel", foreground="green")
         self.style.configure("FB.TLabel", foreground="blue")
         self.style.configure("FP.TLabel", foreground="purple")
+
+        # Scrollbar test
+        # Create a main frame that contains everything
+        main_frame = ttk.Frame(self.root)
+        main_frame.pack(fill=tk.BOTH, expand=1)
+
+        # Create a canvas and attach it to the main frame
+        self.canvas = tk.Canvas(main_frame)
+        self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=1)
+
+        # Add a scrollbar to the canvas
+        scrollbar = ttk.Scrollbar(main_frame, orient=tk.VERTICAL, command=self.canvas.yview)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # Configure the canvas to work with the scrollbar
+        self.canvas.configure(yscrollcommand=scrollbar.set)
+        self.canvas.bind('<Configure>',
+                         lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
 
         self.root.after(0, self.update_all)
 
@@ -97,11 +115,11 @@ class SpeedGUI(object):
 
         # Separate frame for nodes
         self.job_frames = []
-        self.node_frame = ttk.Frame(self.root)
+        self.node_frame = ttk.Frame(self.canvas)
         self.node_frame.pack()
 
         for job_name in self.job_names:
-            frame = ttk.Frame(self.root)
+            frame = ttk.Frame(self.canvas)
             frame.pack()
 
             # Keep track of all job-related frames for updating purposes
@@ -135,7 +153,7 @@ class SpeedGUI(object):
 
             self.gif_label = ttk.Label(image=self.frames[self.ind])
             self.gif_label.pack()
-            self.root.after(0, self.update_gifs)
+            self.canvas.after(0, self.update_gifs)
 
     def update_gifs(self):
         from PIL import Image
@@ -149,7 +167,7 @@ class SpeedGUI(object):
         self.frames[self.ind] = itk.PhotoImage(self.image.resize((200, 200), Image.LANCZOS).copy())
 
         self.gif_label.configure(image=self.frames[self.ind])
-        self.root.after(120, self.update_gifs)
+        self.canvas.after(120, self.update_gifs)
 
     def fetch_job_names(self, wildcard=False):
         if wildcard:
@@ -224,6 +242,19 @@ class SpeedGUI(object):
             # Job probably just resumed/ was submitted
             speed_latest = -1
             speed_mean = -1
+
+        # Determine if multiple samples are taken per iteration: Need to account for this in the logging mode
+        crop_regex = re.compile(r"num_crop_samples [0-9]+")
+        crop_matches = crop_regex.findall(job_description)
+
+        if crop_matches:
+            num_crop_samples = int(re.findall(r"\d+", crop_regex.findall(job_description)[0])[0])
+            if self.logging_mode == "s/it":
+                speed_latest /= num_crop_samples
+                speed_mean /= num_crop_samples
+            else:
+                speed_latest *= num_crop_samples
+                speed_mean *= num_crop_samples
 
         # Isolate job node
         regex = re.compile(r'dgx[\w-]+(?=/)')
@@ -448,7 +479,7 @@ class SpeedGUI(object):
         self.current_time = time.time()
 
         # Schedule the next update
-        self.root.after(self.loop_timing, self.update_all)
+        self.canvas.after(self.loop_timing, self.update_all)
 
 
 if __name__ == "__main__":
