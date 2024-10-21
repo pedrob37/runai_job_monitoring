@@ -3,7 +3,7 @@ import re
 import subprocess
 import time
 import tkinter as tk
-from tkinter import ttk, PhotoImage
+from tkinter import ttk, font
 from PIL import ImageTk as itk
 import numpy as np
 import json
@@ -28,12 +28,14 @@ class SpeedGUI(object):
         self.remote_aggregation = remote_aggregation
         self.dynamic_job_list = dynamic_job_list
         self.festive = festive
+        # Preserve at all times the input job names
+        self.input_job_names = copy.deepcopy(self.job_names)
 
         self.node_dict = {}
 
         self.root = tk.Tk()
         self.root.title("Marshall Monitor" if username == "pedro" else "DGX Monitor")
-        # self.root.attributes("-topmost", True)
+        self.root.attributes("-topmost", True)
 
         # Initialising empty variables to be assigned later by the get_job_list method
         self.gif_label = None
@@ -43,6 +45,7 @@ class SpeedGUI(object):
         self.current_times = None
         self.node_frame = None
         self.job_frames = None
+        self.max_job_width = None
 
         # Set up styles
         self.style = ttk.Style()
@@ -72,11 +75,16 @@ class SpeedGUI(object):
         self.canvas.bind('<Configure>',
                          lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
 
+        # Create another frame inside the canvas to hold job-related frames
+        self.scrollable_job_frame = ttk.Frame(self.canvas)
+        self.canvas.create_window((0, 0),
+                                  window=self.scrollable_job_frame, anchor="nw")
+
         self.root.after(0, self.update_all)
 
         if self.dynamic_job_list:
             self.old_job_names = None
-            self.wildcard_presence = False if not self.job_names else (True if "*" in self.job_names[0] else False)
+            self.wildcard_presence = False if not self.input_job_names else (True if "*" in self.input_job_names[0] else False)
             self.first_pass = True
 
         self.root.mainloop()
@@ -92,15 +100,17 @@ class SpeedGUI(object):
                 else:
                     self.fetch_job_names(wildcard=False)
 
+                print(self.old_job_names, self.job_names)
+
                 # If job list is the same as before, no need for a full update
                 if self.old_job_names == self.job_names:
                     return
 
         # Account for wildcards and missing job names
-        if not self.job_names:
+        if not self.input_job_names:
             self.fetch_job_names(wildcard=False)
-        elif "*" in self.job_names[0]:
-            assert len(self.job_names) == 1, "Only one wildcard supported!"
+        elif self.wildcard_presence:
+            assert len(self.input_job_names) == 1, "Only one wildcard supported!"
             self.fetch_job_names(wildcard=True)
 
         # Starting times
@@ -115,11 +125,11 @@ class SpeedGUI(object):
 
         # Separate frame for nodes
         self.job_frames = []
-        self.node_frame = ttk.Frame(self.canvas)
+        self.node_frame = ttk.Frame(self.scrollable_job_frame)
         self.node_frame.pack()
 
         for job_name in self.job_names:
-            frame = ttk.Frame(self.canvas)
+            frame = ttk.Frame(self.scrollable_job_frame)
             frame.pack()
 
             # Keep track of all job-related frames for updating purposes
@@ -173,7 +183,7 @@ class SpeedGUI(object):
         if wildcard:
             first_job_line = 0
             # Double grep if there is an asterisk in job_names (i.e., wildcard)
-            runai_command = f"runai list | grep Running | grep {''.join(self.job_names[0].split('*'))}"
+            runai_command = f"runai list | grep Running | grep {''.join(self.input_job_names[0].split('*'))}"
         else:
             first_job_line = 1
             runai_command = f"runai list | grep Running"
@@ -192,6 +202,10 @@ class SpeedGUI(object):
 
         # Exclude inference jobs
         self.job_names = [job_name for job_name in self.job_names if "inf-" not in job_name]
+
+        # Find the longest job name
+        label_font = font.Font(family="gothic", size=16, weight="bold")
+        self.max_job_width = max([label_font.measure(job_name) for job_name in self.job_names])
 
     def get_job_details(self, job_name):
         # Get job description
@@ -480,6 +494,9 @@ class SpeedGUI(object):
 
         # Schedule the next update
         self.canvas.after(self.loop_timing, self.update_all)
+
+        # Set geometry
+        self.root.geometry(f"{self.max_job_width + 80}x1000")
 
 
 if __name__ == "__main__":
